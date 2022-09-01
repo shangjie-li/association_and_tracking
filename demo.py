@@ -10,6 +10,7 @@ TIME_INTERVAL = 0.1  # the time interval between frames, second
 TARGET_NUM = 100  # the number of targets
 GATE = 10  # the association threshold, meter
 BLIND_UPDATE_LIMIT = 5  # the limitation of blind update
+CONFIRMATION_THRESH = 5  # the threshold of confirmed times
 EGO_LOCATION = [0, 0, 0]  # the location of the ego vehicle
 DETECT_RANGE = 75  # the range of detection
 SIGMA_AX = 1
@@ -32,7 +33,7 @@ if __name__ == '__main__':
     targets = simulation_utils.init_targets(TARGET_NUM, ITER_NUM)  # [9 * target_num, iter_num]
     tracker = tracker_utils.MultipleTargetTracker(
         TIME_INTERVAL, SIGMA_AX, SIGMA_AY, SIGMA_AZ, SIGMA_OX, SIGMA_OY, SIGMA_OZ,
-        GATE, BLIND_UPDATE_LIMIT)
+        GATE, BLIND_UPDATE_LIMIT, CONFIRMATION_THRESH)
 
     for i in range(ITER_NUM):
         print('Iteration:', i + 1)
@@ -58,7 +59,7 @@ if __name__ == '__main__':
 
         # get the tracked list
         tracker.update_objects(objs_observed)
-        objs = tracker.get_tracked_objects()
+        objs = tracker.get_confirmed_objects()
 
         for j in range(len(objs)):
             print('ID:\t', objs[j].number)

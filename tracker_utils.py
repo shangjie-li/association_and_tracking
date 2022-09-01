@@ -19,6 +19,7 @@ class Object():
         
         self.tracker = None
         self.tracker_blind_update = None
+        self.tracker_confirmed_times = None
 
         self.smoother_l0 = None
         self.smoother_w0 = None
@@ -87,7 +88,7 @@ class Object():
 
 class MultipleTargetTracker():
     def __init__(self, dt, sigma_ax=1, sigma_ay=1, sigma_az=1, sigma_ox=1, sigma_oy=1, sigma_oz=1,
-                 gate=10, blind_update_limit=5, min_size=1.0, max_size=10.0):
+                 gate=10, blind_update_limit=5, confirmation_thresh=5, min_size=1.0, max_size=10.0):
         self.dt = dt
         self.sigma_ax = sigma_ax
         self.sigma_ay = sigma_ay
@@ -97,34 +98,41 @@ class MultipleTargetTracker():
         self.sigma_oz = sigma_oz
         self.gate = gate
         self.blind_update_limit = blind_update_limit
+        self.confirmation_thresh = confirmation_thresh
 
         self.min_size = min_size
         self.max_size = max_size
 
         self.objs_temp = []
         self.objs = []
-        self.number = 0
+        self.tracked_num = 0
+
+    def find_nearest_object(self, obj, objs_observed):
+        flag, idx, ddm = False, 0, float('inf')
+        for k in range(len(objs_observed)):
+            zx, zy, zz = objs_observed[k].get_location()
+            x, y, z = obj.tracker.get_location()
+            dd = ((x - zx) ** 2 + (y - zy) ** 2 + (z - zz) ** 2) ** 0.5
+            if dd < ddm and dd < self.gate:
+                flag, idx, ddm = True, k, dd
+        return flag, idx, ddm
 
     def update_objects(self, inputs):
         # associate and track
         objs_observed = inputs.copy()
         for j in range(len(self.objs)):
-            flag, idx, ddm = False, 0, float('inf')
-            for k in range(len(objs_observed)):
-                zx, zy, zz = objs_observed[k].get_location()
-                x, y, z = self.objs[j].tracker.get_location()
-                dd = ((x - zx) ** 2 + (y - zy) ** 2 + (z - zz) ** 2) ** 0.5
-                if dd < ddm and dd < self.gate:
-                    flag, idx, ddm = True, k, dd
+            flag, idx, _ = self.find_nearest_object(self.objs[j], objs_observed)
             if flag:
                 zx, zy, zz, zl, zw, zh = objs_observed[idx].get_box()
                 self.objs[j].make_tracker_predict()
                 self.objs[j].make_tracker_update(zx, zy, zz, zl, zw, zh)
                 self.objs[j].tracker_blind_update -= 1 if self.objs[j].tracker_blind_update > 0 else 0
+                self.objs[j].tracker_confirmed_times += 1
                 objs_observed.pop(idx)
             else:
                 self.objs[j].make_tracker_predict()
                 self.objs[j].tracker_blind_update += 1
+                self.objs[j].tracker_confirmed_times -= 1 if self.objs[j].tracker_confirmed_times > 0 else 0
             self.objs[j].update_state_from_tracker()
             self.objs[j].limit_shape(min_size=self.min_size, max_size=self.max_size)
 
@@ -137,21 +145,16 @@ class MultipleTargetTracker():
 
         # augment the tracking list
         for j in range(len(self.objs_temp)):
-            flag, idx, ddm = False, 0, float('inf')
-            for k in range(len(objs_observed)):
-                zx, zy, zz = objs_observed[k].get_location()
-                x, y, z = self.objs_temp[j].tracker.get_location()
-                dd = ((x - zx) ** 2 + (y - zy) ** 2 + (z - zz) ** 2) ** 0.5
-                if dd < ddm and dd < self.gate:
-                    flag, idx, ddm = True, k, dd
+            flag, idx, _ = self.find_nearest_object(self.objs_temp[j], objs_observed)
             if flag:
                 zx, zy, zz, zl, zw, zh = objs_observed[idx].get_box()
                 x, y, z = self.objs_temp[j].tracker.get_location()
                 vx, vy, vz = (zx - x) / self.dt, (zy - y) / self.dt, (zz - z) / self.dt
                 self.objs_temp[j].tracker.set_state(zx, vx, zy, vy, zz, vz)
-                self.number += 1
-                self.objs_temp[j].number = self.number
+                self.tracked_num += 1
+                self.objs_temp[j].number = self.tracked_num
                 self.objs_temp[j].tracker_blind_update = 0
+                self.objs_temp[j].tracker_confirmed_times = 0
                 self.objs_temp[j].smoother_l0 = kalman_filter_utils.KalmanFilter2D(self.dt, zl, 0, 1, 1)
                 self.objs_temp[j].smoother_w0 = kalman_filter_utils.KalmanFilter2D(self.dt, zw, 0, 1, 1)
                 self.objs_temp[j].smoother_h0 = kalman_filter_utils.KalmanFilter2D(self.dt, zh, 0, 1, 1)
@@ -167,5 +170,9 @@ class MultipleTargetTracker():
                 self.dt, x0, vx, y0, vy, z0, vz,
                 self.sigma_ax, self.sigma_ay, self.sigma_az, self.sigma_ox, self.sigma_oy, self.sigma_oz)
 
-    def get_tracked_objects(self):
-        return self.objs
+    def get_confirmed_objects(self):
+        objs_confirmed = []
+        for j in range(len(self.objs)):
+            if self.objs[j].tracker_confirmed_times >= self.confirmation_thresh:
+                objs_confirmed.append(self.objs[j])
+        return objs_confirmed
